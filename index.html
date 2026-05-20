@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#080D1A" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Budget" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>Budget App</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+  <style>
+    html, body, #root {
+      margin: 0; padding: 0;
+      min-height: 100vh;
+      background: #080D1A;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-text-size-adjust: 100%;
+    }
+    body { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+    * { -webkit-font-smoothing: antialiased; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React + Babel via CDN — no build step needed -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback } = React;
+
+const STORAGE_KEY = "jorel-budget-app-v3";
+
+const CATEGORIES = [
+  { id: "housing", label: "Housing", icon: "🏠", color: "#4A90D9" },
+  { id: "food", label: "Food & Dining", icon: "🍽️", color: "#E8834A" },
+  { id: "transport", label: "Transport", icon: "🚗", color: "#9B6FD4" },
+  { id: "utilities", label: "Utilities", icon: "⚡", color: "#F5C842" },
+  { id: "kids", label: "Kids & Family", icon: "👨‍👩‍👧", color: "#E05A8A" },
+  { id: "health", label: "Health", icon: "❤️", color: "#4DB87A" },
+  { id: "entertainment", label: "Entertainment", icon: "🎬", color: "#5BC8D4" },
+  { id: "subscriptions", label: "Subscriptions", icon: "🔄", color: "#A78BFA" },
+  { id: "shopping", label: "Shopping", icon: "🛍️", color: "#F472B6" },
+  { id: "amazon", label: "Amazon", icon: "📦", color: "#FF9900" },
+  { id: "investing", label: "Investing", icon: "📈", color: "#8BC34A" },
+  { id: "other", label: "Other", icon: "📋", color: "#A0A0A0" },
+];
+
+const PAYMENT_METHODS = [
+  { id: "prime", label: "Amazon Prime CC", short: "Prime CC", icon: "📦", color: "#FF9900", bg: "#FF990015", isCC: true },
+  { id: "citi", label: "Citi Personal CC", short: "Citi CC", icon: "💳", color: "#0865B8", bg: "#0865B815", isCC: true },
+  { id: "chase", label: "Chase Debit", short: "Chase Debit", icon: "🏦", color: "#117ACA", bg: "#117ACA15", isCC: false },
+  { id: "cash", label: "Cash", short: "Cash", icon: "💵", color: "#4DB87A", bg: "#4DB87A15", isCC: false },
+];
+
+const INCOME_TYPES = [
+  { id: "paycheck", label: "Paycheck", icon: "💼", color: "#43C59E" },
+  { id: "bonus", label: "Bonus", icon: "🎯", color: "#F5C842" },
+  { id: "stocks", label: "Stock Sale / RSU", icon: "📈", color: "#8BC34A" },
+  { id: "realestate", label: "Rental Income", icon: "🏠", color: "#4A90D9" },
+  { id: "freelance", label: "Freelance / Side", icon: "🧑‍💻", color: "#9B6FD4" },
+  { id: "refund", label: "Tax Refund", icon: "🏛️", color: "#5BC8D4" },
+  { id: "gift", label: "Gift / Other", icon: "🎁", color: "#E8834A" },
+];
+
+const ACCOUNTS = [
+  { id: "ally", label: "Ally HYSA", icon: "🏦", color: "#7B2D8B", apy: 4.20, primary: true },
+  { id: "chase_sav", label: "Chase Savings", icon: "🏛️", color: "#117ACA", apy: 0.01 },
+  { id: "robinhood", label: "Robinhood", icon: "📈", color: "#00C805", apy: null },
+];
+
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+const defaultState = () => ({
+  paycheckAmount: "",
+  paycheckDay1: "",
+  paycheckDay2: "",
+  allyMonthlyTarget: 200,
+  amazonAlertLimit: 150,
+  ccBalances: { prime: 0, citi: 0 },
+  ccLimits: { prime: 5000, citi: 10000 },
+  accounts: { ally: 0, chase_sav: 0, robinhood: 0 },
+  goals: [
+    { id: 1, name: "Ally HYSA Goal", target: 10000, current: 0, color: "#7B2D8B", icon: "🏦" },
+    { id: 2, name: "Home Renovation", target: 25000, current: 0, color: "#4A90D9", icon: "🏠" },
+    { id: 3, name: "Real Estate Fund", target: 50000, current: 0, color: "#8BC34A", icon: "📈" },
+  ],
+  budgets: CATEGORIES.reduce((acc, c) => ({ ...acc, [c.id]: 0 }), {}),
+  transactions: [],
+  currentMonth: new Date().getMonth(),
+  currentYear: new Date().getFullYear(),
+});
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return { ...defaultState(), ...JSON.parse(raw) };
+  } catch {}
+  return defaultState();
+}
+function saveState(s) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch {} }
+
+const fmt = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n || 0);
+const fmtD = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
+const pct = (a, b) => b > 0 ? Math.min((a / b) * 100, 100) : 0;
+
+const BudgetApp = function BudgetApp() {
+  const [state, setState] = useState(loadState);
+  const [tab, setTab] = useState("dashboard");
+  const [modal, setModal] = useState(null);
+  const [incomeModal, setIncomeModal] = useState(false);
+  const [incomeTab, setIncomeTab] = useState("paycheck");
+  const [incomeForm, setIncomeForm] = useState({ type: "bonus", amount: "", note: "", date: new Date().toISOString().slice(0,10) });
+  const [txForm, setTxForm] = useState({ amount: "", category: "amazon", paymentMethod: "prime", note: "", date: new Date().toISOString().slice(0,10) });
+  const [goalForm, setGoalForm] = useState({ name: "", target: "", current: "", icon: "💰", color: "#43C59E" });
+  const [editingGoalId, setEditingGoalId] = useState(null);
+  const [depositForm, setDepositForm] = useState({ goalId: "", amount: "" });
+  const [depositModal, setDepositModal] = useState(false);
+  const [filterMethod, setFilterMethod] = useState("all");
+  const [filterCat, setFilterCat] = useState("all");
+  const [statementMethod, setStatementMethod] = useState("prime");
+
+  useEffect(() => { saveState(state); }, [state]);
+  const update = useCallback((patch) => setState(s => ({ ...s, ...patch })), []);
+
+  // ── Derived ──
+  const paycheckDaysThisMonth = (() => {
+    if (!state.paycheckAmount || (!state.paycheckDay1 && !state.paycheckDay2)) return 0;
+    const days = new Date(state.currentYear, state.currentMonth + 1, 0).getDate();
+    let c = 0;
+    [state.paycheckDay1, state.paycheckDay2].forEach(d => { const n = parseInt(d); if (n >= 1 && n <= days) c++; });
+    return c;
+  })();
+  const paycheckMonthlyTotal = paycheckDaysThisMonth * (parseFloat(state.paycheckAmount) || 0);
+
+  const monthTxs = state.transactions.filter(t => {
+    const d = new Date(t.date);
+    return d.getMonth() === state.currentMonth && d.getFullYear() === state.currentYear;
+  });
+  const otherIncome = monthTxs.filter(t => t.type === "income").reduce((a, t) => a + t.amount, 0);
+  const monthIncome = paycheckMonthlyTotal + otherIncome;
+  const monthExpenses = monthTxs.filter(t => t.type === "expense").reduce((a, t) => a + t.amount, 0);
+  const monthSaved = monthIncome - monthExpenses;
+
+  const totalAccounts = Object.values(state.accounts).reduce((a, b) => a + (parseFloat(b) || 0), 0);
+  const totalGoal = state.goals.reduce((a, g) => a + g.target, 0);
+  const totalGoalSaved = state.goals.reduce((a, g) => a + g.current, 0);
+
+  const amazonSpend = monthTxs.filter(t => t.type === "expense" && (t.paymentMethod === "prime" || t.category === "amazon")).reduce((a, t) => a + t.amount, 0);
+  const amazonOver = amazonSpend > (state.amazonAlertLimit || 150);
+
+  const spendByMethod = PAYMENT_METHODS.map(pm => ({
+    ...pm,
+    spent: monthTxs.filter(t => t.type === "expense" && t.paymentMethod === pm.id).reduce((a, t) => a + t.amount, 0),
+  }));
+
+  const spendByCategory = CATEGORIES.map(c => ({
+    ...c,
+    spent: monthTxs.filter(t => t.type === "expense" && t.category === c.id).reduce((a, t) => a + t.amount, 0),
+    budget: state.budgets[c.id] || 0,
+  })).filter(c => c.spent > 0 || c.budget > 0);
+
+  const filteredTxs = monthTxs.filter(t => {
+    if (t.type === "income") return filterMethod === "all" && filterCat === "all";
+    const mOk = filterMethod === "all" || t.paymentMethod === filterMethod;
+    const cOk = filterCat === "all" || t.category === filterCat;
+    return mOk && cOk;
+  });
+
+  // Monthly statement for a CC
+  const getStatement = (pmId) => {
+    const txs = monthTxs.filter(t => t.type === "expense" && t.paymentMethod === pmId);
+    const total = txs.reduce((a, t) => a + t.amount, 0);
+    const byCategory = CATEGORIES.map(c => ({
+      ...c, spent: txs.filter(t => t.category === c.id).reduce((a, t) => a + t.amount, 0)
+    })).filter(c => c.spent > 0).sort((a, b) => b.spent - a.spent);
+    return { txs, total, byCategory };
+  };
+
+  // ── Insights ──
+  const insights = (() => {
+    const tips = [];
+    const allyTarget = parseFloat(state.allyMonthlyTarget) || 200;
+    const allyBal = parseFloat(state.accounts.ally) || 0;
+
+    if (amazonOver) {
+      tips.push({ type: "warn", icon: "📦", title: "Amazon spending alert", body: `You've spent ${fmtD(amazonSpend)} on Amazon this month — ${fmtD(amazonSpend - state.amazonAlertLimit)} over your ${fmtD(state.amazonAlertLimit)} limit. Consider waiting 24 hrs before checkout.` });
+    }
+    if (monthIncome > 0 && monthSaved < allyTarget) {
+      const gap = allyTarget - monthSaved;
+      tips.push({ type: "warn", icon: "🏦", title: "Ally deposit behind", body: `You're ${fmtD(gap)} short of your ${fmtD(allyTarget)}/mo Ally target. You have ${fmtD(Math.max(monthIncome - monthExpenses, 0))} left unallocated this month.` });
+    }
+    if (monthIncome > 0) {
+      const savingsRate = (monthSaved / monthIncome) * 100;
+      if (savingsRate < 10) {
+        tips.push({ type: "warn", icon: "📉", title: "Low savings rate", body: `You're saving ${savingsRate.toFixed(1)}% of income this month. Aim for 20%+ — that would be ${fmtD(monthIncome * 0.2)}/mo put away.` });
+      } else if (savingsRate >= 20) {
+        tips.push({ type: "good", icon: "🎉", title: "Great savings rate!", body: `${savingsRate.toFixed(1)}% savings rate this month. Keep it up — at this pace you'd save ${fmtD(monthSaved * 12)} this year.` });
+      }
+    }
+    const subSpend = monthTxs.filter(t => t.type === "expense" && t.category === "subscriptions").reduce((a, t) => a + t.amount, 0);
+    if (subSpend > 100) tips.push({ type: "tip", icon: "🔄", title: "Subscription creep", body: `You've spent ${fmtD(subSpend)} on subscriptions this month. Review your list — cancel anything you haven't used in 30 days.` });
+
+    if (allyBal > 0) {
+      const monthlyInterest = allyBal * (0.042 / 12);
+      tips.push({ type: "good", icon: "💰", title: "Ally is working for you", body: `At 4.20% APY, your ${fmtD(allyBal)} Ally balance is earning ~${fmtD(monthlyInterest)}/mo in interest. Every extra deposit compounds.` });
+    }
+    const allyIncrease = allyTarget + 100;
+    tips.push({ type: "tip", icon: "🎯", title: "Boost your Ally deposit", body: `Increasing from ${fmtD(allyTarget)}/mo to ${fmtD(allyIncrease)}/mo adds ${fmtD(1200)} more per year. That's a real estate down payment accelerator.` });
+
+    const topCat = [...spendByCategory].sort((a, b) => b.spent - a.spent)[0];
+    if (topCat && topCat.spent > 200 && topCat.id !== "housing") {
+      tips.push({ type: "tip", icon: topCat.icon, title: `${topCat.label} is your top spend`, body: `${fmtD(topCat.spent)} this month. Even cutting 20% here saves ${fmtD(topCat.spent * 0.2 * 12)}/yr — redirect that straight to Ally.` });
+    }
+    return tips;
+  })();
+
+  // ── Actions ──
+  function addTransaction() {
+    if (!txForm.amount || isNaN(parseFloat(txForm.amount))) return;
+    const tx = { id: Date.now(), type: "expense", amount: parseFloat(txForm.amount), category: txForm.category, paymentMethod: txForm.paymentMethod, note: txForm.note, date: txForm.date };
+    update({ transactions: [tx, ...state.transactions] });
+    setTxForm({ amount: "", category: "amazon", paymentMethod: "prime", note: "", date: new Date().toISOString().slice(0,10) });
+    setModal(null);
+  }
+  function addOtherIncome() {
+    if (!incomeForm.amount || isNaN(parseFloat(incomeForm.amount))) return;
+    const incType = INCOME_TYPES.find(i => i.id === incomeForm.type) || INCOME_TYPES[1];
+    const tx = { id: Date.now(), type: "income", amount: parseFloat(incomeForm.amount), category: incomeForm.type, note: incomeForm.note || incType.label, date: incomeForm.date };
+    update({ transactions: [tx, ...state.transactions] });
+    setIncomeForm({ type: "bonus", amount: "", note: "", date: new Date().toISOString().slice(0,10) });
+    setIncomeModal(false);
+  }
+  function addGoal() {
+    if (!goalForm.name || !goalForm.target) return;
+    update({ goals: [...state.goals, { id: Date.now(), name: goalForm.name, target: parseFloat(goalForm.target), current: parseFloat(goalForm.current) || 0, icon: goalForm.icon, color: goalForm.color }] });
+    setGoalForm({ name: "", target: "", current: "", icon: "💰", color: "#43C59E" });
+    setModal(null);
+  }
+  function saveGoal() {
+    update({ goals: state.goals.map(g => g.id === editingGoalId ? { ...g, ...goalForm, target: parseFloat(goalForm.target), current: parseFloat(goalForm.current) || 0 } : g) });
+    setModal(null); setEditingGoalId(null);
+  }
+  function deleteGoal(id) { update({ goals: state.goals.filter(g => g.id !== id) }); }
+  function depositToGoal() {
+    if (!depositForm.goalId || !depositForm.amount) return;
+    update({ goals: state.goals.map(g => g.id === parseInt(depositForm.goalId) ? { ...g, current: Math.min(g.current + parseFloat(depositForm.amount), g.target) } : g) });
+    setDepositForm({ goalId: "", amount: "" }); setDepositModal(false);
+  }
+  function deleteTx(id) { update({ transactions: state.transactions.filter(t => t.id !== id) }); }
+
+  const ICON_OPTIONS = ["💰","🏦","🏠","🚗","✈️","📈","🛡️","👶","🎓","💍","🏖️","🛍️","🎯"];
+  const COLOR_OPTIONS = ["#7B2D8B","#43C59E","#4A90D9","#E8834A","#E05A8A","#9B6FD4","#F5C842","#8BC34A","#5BC8D4","#FF6B6B"];
+
+  const stmt = getStatement(statementMethod);
+
+  return (
+    <div style={{ fontFamily: "'DM Sans', system-ui, sans-serif", background: "#080D1A", minHeight: "100vh", color: "#E8EDF5", maxWidth: 480, margin: "0 auto", position: "relative", paddingBottom: 88 }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        ::-webkit-scrollbar { width: 0; }
+        input, select { outline: none; font-family: inherit; }
+        button { cursor: pointer; font-family: inherit; border: none; }
+        .tab-btn { background: none; color: #6B7A99; font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 6px; border-radius: 10px; transition: all .2s; flex:1; }
+        .tab-btn.active { color: #43C59E; background: rgba(67,197,158,.08); }
+        .card { background: #111827; border-radius: 18px; padding: 18px; }
+        .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.8); z-index: 100; display: flex; align-items: flex-end; justify-content: center; backdrop-filter: blur(6px); }
+        .modal { background: #111827; border-radius: 24px 24px 0 0; padding: 22px; width: 100%; max-width: 480px; max-height: 93vh; overflow-y: auto; }
+        .input { background: #1A2235; border: 1.5px solid #232F45; border-radius: 12px; padding: 11px 14px; color: #E8EDF5; font-size: 15px; width: 100%; transition: border .2s; }
+        .input:focus { border-color: #43C59E; }
+        .select { background: #1A2235; border: 1.5px solid #232F45; border-radius: 12px; padding: 11px 14px; color: #E8EDF5; font-size: 15px; width: 100%; -webkit-appearance: none; }
+        .btn-primary { background: linear-gradient(135deg, #43C59E, #2EA87E); color: #fff; font-weight: 700; font-size: 15px; padding: 13px; border-radius: 13px; width: 100%; transition: opacity .2s; }
+        .btn-primary:hover { opacity: .9; }
+        .btn-ghost { background: #1A2235; color: #6B7A99; font-weight: 600; font-size: 14px; padding: 10px 16px; border-radius: 12px; }
+        .pbar { height: 6px; border-radius: 6px; background: #1A2235; overflow: hidden; }
+        .pfill { height: 100%; border-radius: 6px; transition: width .6s cubic-bezier(.4,0,.2,1); }
+        .tx-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid #141C2C; }
+        .tx-row:last-child { border-bottom: none; }
+        .sec { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #4A5D7A; margin-bottom: 12px; }
+        .lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: #4A5D7A; margin-bottom: 7px; }
+        .goal-card { background: #111827; border-radius: 16px; padding: 15px; margin-bottom: 9px; border: 1.5px solid #1A2235; }
+        .icon-opt { width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 17px; cursor: pointer; background: #1A2235; border: 2px solid transparent; transition: all .15s; }
+        .icon-opt.sel { border-color: #43C59E; background: rgba(67,197,158,.15); }
+        .color-dot { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: all .15s; }
+        .color-dot.sel { border-color: #fff; transform: scale(1.2); }
+        .fab { position: fixed; bottom: 94px; right: 16px; width: 52px; height: 52px; border-radius: 50%; background: linear-gradient(135deg, #43C59E, #2EA87E); color: #fff; font-size: 25px; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 22px rgba(67,197,158,.4); z-index: 50; transition: transform .15s; }
+        .fab:hover { transform: scale(1.07); }
+        .chip { padding: 5px 11px; border-radius: 20px; font-size: 11px; font-weight: 600; background: #1A2235; color: #6B7A99; border: 1.5px solid #232F45; cursor: pointer; white-space: nowrap; transition: all .15s; }
+        .chip.on { background: rgba(67,197,158,.1); color: #43C59E; border-color: rgba(67,197,158,.35); }
+        .insight { border-radius: 14px; padding: 13px 14px; margin-bottom: 10px; }
+        .insight.warn { background: rgba(224,90,138,.08); border: 1px solid rgba(224,90,138,.25); }
+        .insight.good { background: rgba(67,197,158,.07); border: 1px solid rgba(67,197,158,.22); }
+        .insight.tip  { background: rgba(74,144,217,.07); border: 1px solid rgba(74,144,217,.22); }
+        .acc-card { border-radius: 14px; padding: 14px; border: 1.5px solid; flex: 1 1 calc(50% - 5px); min-width: 140px; }
+        .toggle-row { display: flex; background: #1A2235; border-radius: 12px; padding: 3px; gap: 3px; margin-bottom: 18px; }
+        .toggle-btn { flex: 1; padding: 8px; border-radius: 9px; font-size: 12px; font-weight: 700; border: none; background: transparent; color: #6B7A99; transition: all .15s; }
+        .toggle-btn.on { background: #43C59E; color: #fff; }
+      `}</style>
+
+      {/* ── Header ── */}
+      <div style={{ padding: "20px 16px 14px", background: "linear-gradient(180deg,#0C1220 0%,#080D1A 100%)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontSize: 10, color: "#4A5D7A", fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase" }}>Personal Budget</div>
+            <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>Hey, Jorel 👋</div>
+          </div>
+          {amazonOver && (
+            <div style={{ background: "rgba(255,153,0,.12)", border: "1px solid rgba(255,153,0,.35)", borderRadius: 10, padding: "5px 10px", fontSize: 11, fontWeight: 700, color: "#FF9900" }}>
+              📦 Amazon Alert
+            </div>
+          )}
+        </div>
+
+        {/* Net Worth strip */}
+        <div style={{ background: "#111827", borderRadius: 16, padding: "16px", marginTop: 14, border: "1px solid #1A2235" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontSize: 10, color: "#4A5D7A", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".08em" }}>Personal Accounts</div>
+              <div style={{ fontSize: 30, fontWeight: 700, marginTop: 4, fontFamily: "'DM Mono', monospace", letterSpacing: "-.02em" }}>{fmt(totalAccounts)}</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 10, color: "#4A5D7A", fontWeight: 700, textTransform: "uppercase" }}>Ally Primary</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#7B2D8B", fontFamily: "'DM Mono', monospace" }}>{fmt(state.accounts.ally)}</div>
+              <div style={{ fontSize: 10, color: "#4A5D7A", marginTop: 2 }}>4.20% APY</div>
+            </div>
+          </div>
+          {/* Ally progress to monthly target */}
+          {state.paycheckAmount && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                <span style={{ fontSize: 11, color: "#4A5D7A" }}>Monthly Ally target: {fmtD(parseFloat(state.allyMonthlyTarget)||200)}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: monthSaved >= (parseFloat(state.allyMonthlyTarget)||200) ? "#43C59E" : "#E05A8A" }}>
+                  {fmtD(Math.min(monthSaved, parseFloat(state.allyMonthlyTarget)||200))} saved
+                </span>
+              </div>
+              <div className="pbar">
+                <div className="pfill" style={{ width: `${pct(monthSaved, parseFloat(state.allyMonthlyTarget)||200)}%`, background: "linear-gradient(90deg,#7B2D8B,#A855F7)" }} />
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ padding: "0 13px" }}>
+
+        {/* ══ DASHBOARD ══ */}
+        {tab === "dashboard" && (
+          <div>
+            {/* Stats */}
+            <div style={{ display: "flex", gap: 7, marginBottom: 16 }}>
+              {[["Income", fmt(monthIncome), "#43C59E", true], ["Spent", fmt(monthExpenses), "#E05A8A", false], ["Left", fmt(monthSaved), monthSaved >= 0 ? "#43C59E" : "#E05A8A", false]].map(([label, val, color, clickable]) => (
+                <div key={label} className="card" style={{ flex: 1, padding: "12px", cursor: clickable ? "pointer" : "default", borderLeft: `3px solid ${color}` }}
+                  onClick={clickable ? () => setIncomeModal(true) : undefined}>
+                  <div style={{ fontSize: 10, color: "#4A5D7A", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em" }}>{label}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color, marginTop: 3, fontFamily: "'DM Mono', monospace" }}>{val}</div>
+                  {label === "Income" && !state.paycheckAmount && <div style={{ fontSize: 9, color: "#4A5D7A", marginTop: 1 }}>tap to set up</div>}
+                </div>
+              ))}
+            </div>
+
+            {/* Amazon tracker */}
+            <div style={{ background: amazonOver ? "rgba(255,153,0,.08)" : "#111827", border: `1.5px solid ${amazonOver ? "rgba(255,153,0,.35)" : "#1A2235"}`, borderRadius: 14, padding: "13px 15px", marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>📦 Amazon Spend</span>
+                <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: amazonOver ? "#FF9900" : "#E8EDF5" }}>{fmtD(amazonSpend)}</span>
+              </div>
+              <div className="pbar">
+                <div className="pfill" style={{ width: `${pct(amazonSpend, state.amazonAlertLimit||150)}%`, background: amazonOver ? "#FF9900" : "#4A5D7A" }} />
+              </div>
+              <div style={{ fontSize: 11, color: "#4A5D7A", marginTop: 5 }}>
+                {amazonOver ? `⚠️ ${fmtD(amazonSpend - state.amazonAlertLimit)} over limit` : `${fmtD((state.amazonAlertLimit||150) - amazonSpend)} under ${fmtD(state.amazonAlertLimit)} limit`}
+              </div>
+            </div>
+
+            {/* CC Balances */}
+            <div className="sec">Credit Card Balances</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
+              {PAYMENT_METHODS.filter(p => p.isCC).map(pm => {
+                const bal = parseFloat(state.ccBalances[pm.id]) || 0;
+                const lim = parseFloat(state.ccLimits[pm.id]) || 5000;
+                const util = pct(bal, lim);
+                return (
+                  <div key={pm.id} className="acc-card" style={{ borderColor: pm.color + "44", background: pm.bg }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: pm.color }}>{pm.icon} {pm.short}</span>
+                      <span style={{ fontSize: 10, color: util > 30 ? "#E05A8A" : "#4A5D7A" }}>{util.toFixed(0)}% used</span>
+                    </div>
+                    <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#E8EDF5" }}>{fmtD(bal)}</div>
+                    <div style={{ fontSize: 10, color: "#4A5D7A", marginBottom: 6 }}>of {fmt(lim)} limit</div>
+                    <div className="pbar">
+                      <div className="pfill" style={{ width: `${util}%`, background: util > 30 ? "#E05A8A" : pm.color }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Accounts */}
+            <div className="sec">Savings & Investment Accounts</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
+              {ACCOUNTS.map(acc => {
+                const bal = parseFloat(state.accounts[acc.id]) || 0;
+                return (
+                  <div key={acc.id} className="acc-card" style={{ borderColor: acc.color + "44", background: acc.color + "0D" }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: acc.color, marginBottom: 4 }}>{acc.icon} {acc.label}</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}>{fmtD(bal)}</div>
+                    {acc.apy && <div style={{ fontSize: 10, color: "#4A5D7A", marginTop: 3 }}>{acc.apy}% APY · ~{fmtD(bal * acc.apy / 100 / 12)}/mo</div>}
+                    {!acc.apy && <div style={{ fontSize: 10, color: "#4A5D7A", marginTop: 3 }}>Brokerage</div>}
+                    <button onClick={() => setModal("editAccount_" + acc.id)}
+                      style={{ marginTop: 8, width: "100%", background: acc.color + "22", color: acc.color, border: "none", borderRadius: 8, padding: "5px 0", fontSize: 11, fontWeight: 700 }}>
+                      Update Balance
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Goals */}
+            <div className="sec">Savings Goals</div>
+            {state.goals.map(g => {
+              const p = pct(g.current, g.target);
+              return (
+                <div key={g.id} className="goal-card">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                      <div style={{ width: 36, height: 36, borderRadius: 10, background: g.color + "22", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>{g.icon}</div>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 13 }}>{g.name}</div>
+                        <div style={{ fontSize: 11, color: "#4A5D7A", marginTop: 1 }}>{fmt(g.current)} / {fmt(g.target)}</div>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: g.color, fontFamily: "'DM Mono', monospace" }}>{p.toFixed(0)}%</div>
+                      <div style={{ display: "flex", gap: 4, marginTop: 3 }}>
+                        <button onClick={() => { setDepositForm({ goalId: String(g.id), amount: "" }); setDepositModal(true); }} style={{ background: g.color + "22", color: g.color, border: "none", borderRadius: 6, padding: "3px 7px", fontSize: 10, fontWeight: 700 }}>+Add</button>
+                        <button onClick={() => { setEditingGoalId(g.id); setGoalForm({ name: g.name, target: String(g.target), current: String(g.current), icon: g.icon, color: g.color }); setModal("editGoal"); }} style={{ background: "#1A2235", color: "#6B7A99", border: "none", borderRadius: 6, padding: "3px 6px", fontSize: 10 }}>✏️</button>
+                        <button onClick={() => deleteGoal(g.id)} style={{ background: "#1A2235", color: "#E05A8A", border: "none", borderRadius: 6, padding: "3px 6px", fontSize: 10 }}>✕</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="pbar" style={{ marginTop: 9 }}>
+                    <div className="pfill" style={{ width: `${p}%`, background: `linear-gradient(90deg,${g.color},${g.color}BB)` }} />
+                  </div>
+                </div>
+              );
+            })}
+            <button onClick={() => { setGoalForm({ name: "", target: "", current: "", icon: "💰", color: "#43C59E" }); setModal("addGoal"); }}
+              style={{ background: "#111827", color: "#43C59E", border: "1.5px dashed #243044", borderRadius: 14, padding: "12px", width: "100%", fontWeight: 700, fontSize: 12, marginBottom: 22 }}>
+              + Add New Goal
+            </button>
+          </div>
+        )}
+
+        {/* ══ TRANSACTIONS ══ */}
+        {tab === "transactions" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div className="sec" style={{ margin: 0 }}>Transactions</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <button style={{ background: "#1A2235", color: "#6B7A99", width: 27, height: 27, borderRadius: 7, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" }}
+                  onClick={() => { let m=state.currentMonth-1,y=state.currentYear; if(m<0){m=11;y--;} update({currentMonth:m,currentYear:y}); }}>‹</button>
+                <span style={{ fontSize: 12, fontWeight: 700, minWidth: 64, textAlign: "center" }}>{MONTHS[state.currentMonth]} {state.currentYear}</span>
+                <button style={{ background: "#1A2235", color: "#6B7A99", width: 27, height: 27, borderRadius: 7, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" }}
+                  onClick={() => { let m=state.currentMonth+1,y=state.currentYear; if(m>11){m=0;y++;} update({currentMonth:m,currentYear:y}); }}>›</button>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 9 }}>
+              <div className="lbl">Card / Method</div>
+              <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 3 }}>
+                <button className={`chip ${filterMethod==="all"?"on":""}`} onClick={() => setFilterMethod("all")}>All</button>
+                {PAYMENT_METHODS.map(pm => (
+                  <button key={pm.id} className={`chip ${filterMethod===pm.id?"on":""}`}
+                    onClick={() => setFilterMethod(filterMethod===pm.id?"all":pm.id)}
+                    style={filterMethod===pm.id ? { background: pm.bg, color: pm.color, borderColor: pm.color+"55" } : {}}>
+                    {pm.icon} {pm.short}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <div className="lbl">Category</div>
+              <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 3 }}>
+                <button className={`chip ${filterCat==="all"?"on":""}`} onClick={() => setFilterCat("all")}>All</button>
+                {CATEGORIES.map(c => (
+                  <button key={c.id} className={`chip ${filterCat===c.id?"on":""}`} onClick={() => setFilterCat(filterCat===c.id?"all":c.id)}>
+                    {c.icon} {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {(filterMethod !== "all" || filterCat !== "all") && (
+              <div style={{ background: "#111827", borderRadius: 11, padding: "9px 13px", marginBottom: 11, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: "#6B7A99" }}>
+                  {filterMethod !== "all" && PAYMENT_METHODS.find(p=>p.id===filterMethod)?.short}
+                  {filterMethod !== "all" && filterCat !== "all" && " · "}
+                  {filterCat !== "all" && CATEGORIES.find(c=>c.id===filterCat)?.label}
+                </span>
+                <span style={{ fontSize: 14, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#E05A8A" }}>
+                  {fmtD(filteredTxs.filter(t=>t.type==="expense").reduce((a,t)=>a+t.amount,0))}
+                </span>
+              </div>
+            )}
+
+            {filteredTxs.length === 0 && <div style={{ textAlign: "center", color: "#4A5D7A", padding: "36px 0", fontSize: 14 }}>No transactions found.</div>}
+            <div className="card" style={{ padding: "4px 16px" }}>
+              {filteredTxs.slice(0,60).map(t => {
+                const isInc = t.type === "income";
+                const cat = isInc ? (INCOME_TYPES.find(i=>i.id===t.category)||INCOME_TYPES[6]) : (CATEGORIES.find(c=>c.id===t.category)||CATEGORIES[11]);
+                const pm = !isInc ? PAYMENT_METHODS.find(p=>p.id===t.paymentMethod) : null;
+                return (
+                  <div key={t.id} className="tx-row">
+                    <div style={{ width: 35, height: 35, borderRadius: 9, background: cat.color+"22", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{cat.icon}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.note || cat.label}</div>
+                      <div style={{ display: "flex", gap: 5, marginTop: 2, flexWrap: "wrap", alignItems: "center" }}>
+                        {pm && <span style={{ fontSize: 10, fontWeight: 700, color: pm.color, background: pm.bg, padding: "1px 5px", borderRadius: 5 }}>{pm.icon} {pm.short}</span>}
+                        <span style={{ fontSize: 10, color: "#4A5D7A" }}>{cat.label} · {t.date}</span>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: isInc ? "#43C59E" : "#E05A8A" }}>
+                        {isInc ? "+" : "-"}{fmtD(t.amount)}
+                      </span>
+                      <button onClick={() => deleteTx(t.id)} style={{ background: "none", color: "#4A5D7A", fontSize: 12, padding: "2px 3px" }}>✕</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ══ STATEMENTS ══ */}
+        {tab === "statements" && (
+          <div>
+            <div className="sec">Monthly Statement</div>
+            <div className="toggle-row">
+              {PAYMENT_METHODS.filter(p=>p.isCC).map(pm => (
+                <button key={pm.id} className={`toggle-btn ${statementMethod===pm.id?"on":""}`} onClick={() => setStatementMethod(pm.id)}>
+                  {pm.icon} {pm.short}
+                </button>
+              ))}
+            </div>
+
+            {/* Month nav */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, justifyContent: "center" }}>
+              <button style={{ background: "#1A2235", color: "#6B7A99", width: 28, height: 28, borderRadius: 7, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" }}
+                onClick={() => { let m=state.currentMonth-1,y=state.currentYear; if(m<0){m=11;y--;} update({currentMonth:m,currentYear:y}); }}>‹</button>
+              <span style={{ fontSize: 14, fontWeight: 700 }}>{MONTHS[state.currentMonth]} {state.currentYear}</span>
+              <button style={{ background: "#1A2235", color: "#6B7A99", width: 28, height: 28, borderRadius: 7, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center" }}
+                onClick={() => { let m=state.currentMonth+1,y=state.currentYear; if(m>11){m=0;y++;} update({currentMonth:m,currentYear:y}); }}>›</button>
+            </div>
+
+            {/* CC summary */}
+            {(() => {
+              const pm = PAYMENT_METHODS.find(p=>p.id===statementMethod);
+              const bal = parseFloat(state.ccBalances[statementMethod])||0;
+              const lim = parseFloat(state.ccLimits[statementMethod])||5000;
+              return (
+                <div style={{ background: pm.bg, border: `1.5px solid ${pm.color}44`, borderRadius: 16, padding: "16px", marginBottom: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: pm.color }}>{pm.icon} {pm.label}</div>
+                      <div style={{ fontSize: 11, color: "#4A5D7A", marginTop: 2 }}>Current balance</div>
+                      <div style={{ fontSize: 26, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#E8EDF5", marginTop: 2 }}>{fmtD(bal)}</div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 11, color: "#4A5D7A" }}>This month charges</div>
+                      <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: pm.color }}>{fmtD(stmt.total)}</div>
+                      <div style={{ fontSize: 10, color: "#4A5D7A", marginTop: 2 }}>{stmt.txs.length} transactions</div>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, color: "#4A5D7A" }}>Credit utilization</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: pct(bal,lim) > 30 ? "#E05A8A" : "#4A5D7A" }}>{pct(bal,lim).toFixed(0)}%</span>
+                    </div>
+                    <div className="pbar">
+                      <div className="pfill" style={{ width: `${pct(bal,lim)}%`, background: pct(bal,lim) > 30 ? "#E05A8A" : pm.color }} />
+                    </div>
+                    {pct(bal,lim) > 30 && <div style={{ fontSize: 10, color: "#E05A8A", marginTop: 4 }}>⚠️ Keep utilization under 30% to protect your credit score</div>}
+                  </div>
+                  <button onClick={() => setModal("editCC_" + statementMethod)}
+                    style={{ marginTop: 12, width: "100%", background: pm.color+"22", color: pm.color, border: "none", borderRadius: 9, padding: "8px", fontSize: 12, fontWeight: 700 }}>
+                    Update Balance & Limit
+                  </button>
+                </div>
+              );
+            })()}
+
+            {/* Spend by category */}
+            {stmt.byCategory.length > 0 && (
+              <>
+                <div className="sec">Spend by Category</div>
+                <div className="card" style={{ marginBottom: 16 }}>
+                  {stmt.byCategory.map(c => (
+                    <div key={c.id} style={{ marginBottom: 12 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontSize: 13 }}>{c.icon} {c.label}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "'DM Mono', monospace" }}>{fmtD(c.spent)}</span>
+                      </div>
+                      <div className="pbar">
+                        <div className="pfill" style={{ width: `${pct(c.spent, stmt.total)}%`, background: c.color }} />
+                      </div>
+                      <div style={{ fontSize: 10, color: "#4A5D7A", marginTop: 2 }}>{((c.spent/stmt.total)*100).toFixed(0)}% of statement</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Transactions */}
+            {stmt.txs.length > 0 && (
+              <>
+                <div className="sec">All Charges</div>
+                <div className="card" style={{ padding: "4px 16px", marginBottom: 22 }}>
+                  {stmt.txs.map(t => {
+                    const cat = CATEGORIES.find(c=>c.id===t.category)||CATEGORIES[11];
+                    return (
+                      <div key={t.id} className="tx-row">
+                        <div style={{ width: 34, height: 34, borderRadius: 9, background: cat.color+"22", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>{cat.icon}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.note || cat.label}</div>
+                          <div style={{ fontSize: 10, color: "#4A5D7A", marginTop: 1 }}>{cat.label} · {t.date}</div>
+                        </div>
+                        <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#E05A8A", flexShrink: 0 }}>{fmtD(t.amount)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+            {stmt.txs.length === 0 && <div style={{ textAlign: "center", color: "#4A5D7A", padding: "30px 0", fontSize: 13 }}>No charges logged for this card this month.</div>}
+          </div>
+        )}
+
+        {/* ══ INSIGHTS ══ */}
+        {tab === "insights" && (
+          <div>
+            <div className="sec">Smart Insights</div>
+            <div style={{ fontSize: 12, color: "#4A5D7A", marginBottom: 16, lineHeight: 1.5 }}>
+              Personalized feedback based on your spending and savings patterns this month.
+            </div>
+            {insights.length === 0 && <div style={{ textAlign: "center", color: "#4A5D7A", padding: "30px 0", fontSize: 13 }}>Log some transactions to unlock insights.</div>}
+            {insights.map((ins, i) => (
+              <div key={i} className={`insight ${ins.type}`}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 18 }}>{ins.icon}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: ins.type==="warn" ? "#E05A8A" : ins.type==="good" ? "#43C59E" : "#4A90D9" }}>{ins.title}</span>
+                </div>
+                <div style={{ fontSize: 13, color: "#A0B0C8", lineHeight: 1.55 }}>{ins.body}</div>
+              </div>
+            ))}
+
+            {/* Settings section */}
+            <div className="sec" style={{ marginTop: 24 }}>Alerts & Targets</div>
+            <div className="card" style={{ marginBottom: 22 }}>
+              <div style={{ marginBottom: 16 }}>
+                <div className="lbl">Monthly Ally Target ($)</div>
+                <input className="input" type="number" value={state.allyMonthlyTarget} onChange={e => update({ allyMonthlyTarget: e.target.value })} placeholder="200" />
+                <div style={{ fontSize: 11, color: "#4A5D7A", marginTop: 5 }}>How much you want to deposit to Ally each month</div>
+              </div>
+              <div>
+                <div className="lbl">Amazon Spend Alert ($)</div>
+                <input className="input" type="number" value={state.amazonAlertLimit} onChange={e => update({ amazonAlertLimit: parseFloat(e.target.value)||150 })} placeholder="150" />
+                <div style={{ fontSize: 11, color: "#4A5D7A", marginTop: 5 }}>Get flagged when Prime CC spend exceeds this</div>
+              </div>
+            </div>
+
+            {/* Income setup */}
+            <div className="sec">Paycheck Setup</div>
+            <div className="card" style={{ marginBottom: 22 }}>
+              <div style={{ marginBottom: 14 }}>
+                <div className="lbl">Net Pay Per Paycheck</div>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#4A5D7A", fontSize: 16, fontWeight: 700 }}>$</span>
+                  <input className="input" type="number" placeholder="0.00" value={state.paycheckAmount} onChange={e => update({ paycheckAmount: e.target.value })} style={{ paddingLeft: 30, fontFamily: "'DM Mono', monospace" }} />
+                </div>
+              </div>
+              <div>
+                <div className="lbl">Pay Days</div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  {[["paycheckDay1","1st"],["paycheckDay2","2nd"]].map(([k,label]) => (
+                    <div key={k} style={{ flex: 1 }}>
+                      <div style={{ fontSize: 11, color: "#4A5D7A", marginBottom: 4 }}>{label} pay day</div>
+                      <select className="select" value={state[k]||""} onChange={e => update({ [k]: e.target.value })}>
+                        <option value="">—</option>
+                        {Array.from({length:31},(_,i)=>i+1).map(d=><option key={d} value={d}>Day {d}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* FABs */}
+      {tab === "transactions" && <button className="fab" onClick={() => setModal("addTx")}>+</button>}
+      {tab === "dashboard" && <button className="fab" onClick={() => setIncomeModal(true)} style={{ fontSize: 20 }}>💚</button>}
+
+      {/* Bottom Nav */}
+      <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: "#0C1220", borderTop: "1px solid #141C2C", display: "flex", padding: "8px 4px 14px", zIndex: 40 }}>
+        {[["dashboard","📊","Overview"],["transactions","💳","Expenses"],["statements","🧾","Statements"],["insights","💡","Insights"]].map(([t,icon,label]) => (
+          <button key={t} className={`tab-btn ${tab===t?"active":""}`} onClick={() => setTab(t)}>
+            <span style={{ fontSize: 20 }}>{icon}</span>{label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Modals ── */}
+
+      {/* Add Expense */}
+      {modal === "addTx" && (
+        <div className="modal-bg" onClick={e => e.target===e.currentTarget && setModal(null)}>
+          <div className="modal">
+            <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 16 }}>🔴 Add Expense</div>
+            <div style={{ position: "relative", marginBottom: 14 }}>
+              <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#4A5D7A", fontSize: 18, fontWeight: 700 }}>$</span>
+              <input className="input" type="number" placeholder="0.00" value={txForm.amount} onChange={e => setTxForm(f=>({...f,amount:e.target.value}))} style={{ paddingLeft: 30, fontFamily: "'DM Mono', monospace", fontSize: 22, fontWeight: 700 }} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <div className="lbl">Payment Method</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                {PAYMENT_METHODS.map(pm => (
+                  <button key={pm.id} onClick={() => setTxForm(f=>({...f,paymentMethod:pm.id}))}
+                    style={{ flex: "1 1 calc(50% - 4px)", padding: "9px 11px", borderRadius: 11, fontWeight: 700, fontSize: 12, border: `1.5px solid ${txForm.paymentMethod===pm.id ? pm.color : "#232F45"}`, background: txForm.paymentMethod===pm.id ? pm.bg : "#1A2235", color: txForm.paymentMethod===pm.id ? pm.color : "#6B7A99", textAlign: "left", display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 17 }}>{pm.icon}</span><span>{pm.short}</span>
+                    {txForm.paymentMethod===pm.id && <span style={{ marginLeft: "auto" }}>✓</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <div className="lbl">Category</div>
+              <select className="select" value={txForm.category} onChange={e => setTxForm(f=>({...f,category:e.target.value}))}>
+                {CATEGORIES.map(c=><option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
+              </select>
+            </div>
+            <input className="input" type="text" placeholder="Note (optional)" value={txForm.note} onChange={e => setTxForm(f=>({...f,note:e.target.value}))} style={{ marginBottom: 11 }} />
+            <input className="input" type="date" value={txForm.date} onChange={e => setTxForm(f=>({...f,date:e.target.value}))} style={{ marginBottom: 15 }} />
+            <button className="btn-primary" onClick={addTransaction}>Add Expense</button>
+            <button className="btn-ghost" onClick={() => setModal(null)} style={{ width:"100%", textAlign:"center", marginTop: 9 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Account Balance */}
+      {modal && modal.startsWith("editAccount_") && (() => {
+        const accId = modal.replace("editAccount_","");
+        const acc = ACCOUNTS.find(a=>a.id===accId);
+        if (!acc) return null;
+        return (
+          <div className="modal-bg" onClick={e => e.target===e.currentTarget && setModal(null)}>
+            <div className="modal">
+              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 4 }}>{acc.icon} {acc.label}</div>
+              <div style={{ fontSize: 12, color: "#4A5D7A", marginBottom: 18 }}>Update your current balance</div>
+              <div style={{ position: "relative", marginBottom: 16 }}>
+                <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#4A5D7A", fontSize: 17, fontWeight: 700 }}>$</span>
+                <input className="input" type="number" placeholder="0.00" value={state.accounts[accId]||""}
+                  onChange={e => update({ accounts: { ...state.accounts, [accId]: parseFloat(e.target.value)||0 } })}
+                  style={{ paddingLeft: 30, fontFamily: "'DM Mono', monospace", fontSize: 22, fontWeight: 700 }} />
+              </div>
+              {acc.apy && (
+                <div style={{ background: acc.color+"11", border: `1px solid ${acc.color}33`, borderRadius: 12, padding: "11px 14px", marginBottom: 16, fontSize: 13, color: "#A0B0C8", lineHeight: 1.5 }}>
+                  At {acc.apy}% APY, your current balance earns ~{fmtD((parseFloat(state.accounts[accId])||0) * acc.apy / 100 / 12)}/month. Every deposit compounds.
+                </div>
+              )}
+              <button className="btn-primary" onClick={() => setModal(null)}>Save</button>
+              <button className="btn-ghost" onClick={() => setModal(null)} style={{ width:"100%", textAlign:"center", marginTop: 9 }}>Cancel</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Edit CC Balance */}
+      {modal && modal.startsWith("editCC_") && (() => {
+        const pmId = modal.replace("editCC_","");
+        const pm = PAYMENT_METHODS.find(p=>p.id===pmId);
+        if (!pm) return null;
+        return (
+          <div className="modal-bg" onClick={e => e.target===e.currentTarget && setModal(null)}>
+            <div className="modal">
+              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 4 }}>{pm.icon} {pm.label}</div>
+              <div style={{ fontSize: 12, color: "#4A5D7A", marginBottom: 18 }}>Current balance & credit limit</div>
+              <div className="lbl">Current Balance Owed</div>
+              <div style={{ position: "relative", marginBottom: 14 }}>
+                <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#4A5D7A", fontSize: 16, fontWeight: 700 }}>$</span>
+                <input className="input" type="number" placeholder="0.00" value={state.ccBalances[pmId]||""}
+                  onChange={e => update({ ccBalances: { ...state.ccBalances, [pmId]: parseFloat(e.target.value)||0 } })}
+                  style={{ paddingLeft: 30, fontFamily: "'DM Mono', monospace", fontSize: 20, fontWeight: 700 }} />
+              </div>
+              <div className="lbl">Credit Limit</div>
+              <div style={{ position: "relative", marginBottom: 16 }}>
+                <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#4A5D7A", fontSize: 16, fontWeight: 700 }}>$</span>
+                <input className="input" type="number" placeholder="5000" value={state.ccLimits[pmId]||""}
+                  onChange={e => update({ ccLimits: { ...state.ccLimits, [pmId]: parseFloat(e.target.value)||5000 } })}
+                  style={{ paddingLeft: 30, fontFamily: "'DM Mono', monospace", fontSize: 20, fontWeight: 700 }} />
+              </div>
+              <button className="btn-primary" onClick={() => setModal(null)}>Save</button>
+              <button className="btn-ghost" onClick={() => setModal(null)} style={{ width:"100%", textAlign:"center", marginTop: 9 }}>Cancel</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Income Modal */}
+      {incomeModal && (
+        <div className="modal-bg" onClick={e => e.target===e.currentTarget && setIncomeModal(false)}>
+          <div className="modal">
+            <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 4 }}>💚 Income</div>
+            <div style={{ fontSize: 12, color: "#4A5D7A", marginBottom: 16 }}>Configure your paycheck or log one-time income</div>
+            <div className="toggle-row" style={{ marginBottom: 18 }}>
+              {[["paycheck","💼 Paycheck"],["other","✨ Other"]].map(([t,label]) => (
+                <button key={t} className={`toggle-btn ${incomeTab===t?"on":""}`} onClick={() => setIncomeTab(t)}>{label}</button>
+              ))}
+            </div>
+            {incomeTab === "paycheck" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
+                <div>
+                  <div className="lbl">Net Pay Per Paycheck</div>
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#4A5D7A", fontSize: 17, fontWeight: 700 }}>$</span>
+                    <input className="input" type="number" placeholder="0.00" value={state.paycheckAmount} onChange={e => update({ paycheckAmount: e.target.value })} style={{ paddingLeft: 30, fontFamily: "'DM Mono', monospace", fontSize: 21, fontWeight: 700 }} />
+                  </div>
+                </div>
+                <div>
+                  <div className="lbl">Biweekly Pay Days</div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {[["paycheckDay1","1st"],["paycheckDay2","2nd"]].map(([k,l]) => (
+                      <div key={k} style={{ flex: 1 }}>
+                        <div style={{ fontSize: 11, color: "#4A5D7A", marginBottom: 4 }}>{l} pay day</div>
+                        <select className="select" value={state[k]||""} onChange={e => update({ [k]: e.target.value })}>
+                          <option value="">— None —</option>
+                          {Array.from({length:31},(_,i)=>i+1).map(d=><option key={d} value={d}>Day {d}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {state.paycheckAmount && (state.paycheckDay1 || state.paycheckDay2) && (
+                  <div style={{ background: "rgba(67,197,158,.07)", border: "1px solid rgba(67,197,158,.2)", borderRadius: 12, padding: "11px 14px" }}>
+                    <div style={{ fontSize: 11, color: "#43C59E", fontWeight: 700, marginBottom: 2 }}>📅 {MONTHS[state.currentMonth]} {state.currentYear}</div>
+                    <div style={{ fontSize: 19, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#43C59E" }}>{fmt(paycheckMonthlyTotal)}</div>
+                    <div style={{ fontSize: 11, color: "#4A5D7A", marginTop: 2 }}>{paycheckDaysThisMonth} check{paycheckDaysThisMonth!==1?"s":""} × {fmtD(parseFloat(state.paycheckAmount)||0)}</div>
+                  </div>
+                )}
+                <button className="btn-primary" onClick={() => setIncomeModal(false)}>Save</button>
+              </div>
+            )}
+            {incomeTab === "other" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+                <div>
+                  <div className="lbl">Type</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                    {INCOME_TYPES.filter(i=>i.id!=="paycheck").map(i => (
+                      <button key={i.id} onClick={() => setIncomeForm(f=>({...f,type:i.id}))}
+                        style={{ padding: "6px 12px", borderRadius: 18, fontWeight: 600, fontSize: 12, border: `1.5px solid ${incomeForm.type===i.id ? i.color : "#232F45"}`, background: incomeForm.type===i.id ? i.color+"22" : "#1A2235", color: incomeForm.type===i.id ? i.color : "#6B7A99" }}>
+                        {i.icon} {i.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "#4A5D7A", fontSize: 17, fontWeight: 700 }}>$</span>
+                  <input className="input" type="number" placeholder="Amount" value={incomeForm.amount} onChange={e => setIncomeForm(f=>({...f,amount:e.target.value}))} style={{ paddingLeft: 30, fontFamily: "'DM Mono', monospace", fontSize: 19, fontWeight: 700 }} />
+                </div>
+                <input className="input" type="text" placeholder="Note (e.g. Q2 bonus)" value={incomeForm.note} onChange={e => setIncomeForm(f=>({...f,note:e.target.value}))} />
+                <input className="input" type="date" value={incomeForm.date} onChange={e => setIncomeForm(f=>({...f,date:e.target.value}))} />
+                <button className="btn-primary" onClick={addOtherIncome}>Log Income</button>
+              </div>
+            )}
+            <button className="btn-ghost" onClick={() => setIncomeModal(false)} style={{ width:"100%", textAlign:"center", marginTop: 11 }}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* Goal Modals */}
+      {(modal === "addGoal" || modal === "editGoal") && (
+        <div className="modal-bg" onClick={e => e.target===e.currentTarget && setModal(null)}>
+          <div className="modal">
+            <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 16 }}>{modal==="addGoal" ? "New Savings Goal" : "Edit Goal"}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+              <input className="input" type="text" placeholder="Goal name" value={goalForm.name} onChange={e => setGoalForm(f=>({...f,name:e.target.value}))} />
+              <input className="input" type="number" placeholder="Target ($)" value={goalForm.target} onChange={e => setGoalForm(f=>({...f,target:e.target.value}))} />
+              <input className="input" type="number" placeholder="Already saved ($)" value={goalForm.current} onChange={e => setGoalForm(f=>({...f,current:e.target.value}))} />
+              <div><div className="lbl">Icon</div><div style={{ display:"flex",flexWrap:"wrap",gap:6 }}>{ICON_OPTIONS.map(ico=><div key={ico} className={`icon-opt ${goalForm.icon===ico?"sel":""}`} onClick={()=>setGoalForm(f=>({...f,icon:ico}))}>{ico}</div>)}</div></div>
+              <div><div className="lbl">Color</div><div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>{COLOR_OPTIONS.map(col=><div key={col} className={`color-dot ${goalForm.color===col?"sel":""}`} style={{ background:col }} onClick={()=>setGoalForm(f=>({...f,color:col}))} />)}</div></div>
+              <button className="btn-primary" onClick={modal==="addGoal" ? addGoal : saveGoal}>{modal==="addGoal" ? "Create Goal" : "Save Changes"}</button>
+              <button className="btn-ghost" onClick={() => setModal(null)} style={{ width:"100%", textAlign:"center" }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deposit */}
+      {depositModal && (
+        <div className="modal-bg" onClick={e => e.target===e.currentTarget && setDepositModal(false)}>
+          <div className="modal">
+            <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 16 }}>Deposit to Goal</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+              <select className="select" value={depositForm.goalId} onChange={e => setDepositForm(f=>({...f,goalId:e.target.value}))}>
+                <option value="">Select a goal...</option>
+                {state.goals.map(g=><option key={g.id} value={g.id}>{g.icon} {g.name} — {fmt(g.current)} / {fmt(g.target)}</option>)}
+              </select>
+              <input className="input" type="number" placeholder="Amount ($)" value={depositForm.amount} onChange={e => setDepositForm(f=>({...f,amount:e.target.value}))} />
+              <button className="btn-primary" onClick={depositToGoal}>Deposit</button>
+              <button className="btn-ghost" onClick={() => setDepositModal(false)} style={{ width:"100%", textAlign:"center" }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+    // Mount
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(BudgetApp));
+
+    // Register service worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
